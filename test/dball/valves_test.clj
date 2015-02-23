@@ -49,13 +49,20 @@
           timed-batches (<!! timed-batches)
           batches (map last timed-batches)
           batch-times (map (fn [[time batch]] (- time (first batch))) timed-batches)]
-      (and (= messages (apply concat batches))
-           (every? (fn [batch]
-                     (and (seq batch)
-                          (or (not max-count)
-                              (>= max-count (count batch)))))
-                   batches)
-           (every? (fn [batch-time]
-                     (let [delta (- max-ms batch-time)]
-                       (pos? (+ delta timeout-error-ms))))
-                   batch-times)))))
+      (and
+       ;; all messages are conveyed
+       (= messages (apply concat batches))
+
+       ;; batches are never empty or larger than the max-count
+       (every? (fn [batch]
+                 (and (seq batch)
+                      (or (not max-count)
+                          (>= max-count (count batch)))))
+               batches)
+
+       ;; batches never take longer than max-ms + the timeout channel
+       ;; imprecision factor
+       (every? (fn [batch-time]
+                 (let [delta (- max-ms batch-time)]
+                   (pos? (+ delta timeout-error-ms))))
+               batch-times)))))
