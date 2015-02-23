@@ -19,9 +19,31 @@ between two channels.
 
 Reads the input and emits it in batches to the output, bounded by a
 maximum time and an optional maximum buffer size.
+
 ```
 (valves/batching-valve input output 5000 100)
 ```
+
+### Flow limiting valve
+
+Reads the input and emits its messages to the output at a rate no
+greater than that given by the period.
+
+```
+(valves/flow-limiting-valve input output 1000)
+```
+
+### Clock source
+
+Emits :tick messages at a rate given by the period.
+
+```
+(valves/clock-source 1000)
+```
+
+Clock sources use java.util.concurrent schedulers to achieve greater
+precision than that afforded by a timeout channel loop. Clock source
+channels must be closed after use in order to clean up internal processes.
 
 ## License
 

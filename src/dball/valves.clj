@@ -1,5 +1,7 @@
 (ns dball.valves
-  (:require [clojure.core.async :refer [timeout >! <! alts! go-loop close!]]))
+  (:require [clojure.core.async :as async
+             :refer [timeout >! <! alts! go-loop close! chan >!!]])
+  (:import [java.util.concurrent Executors ScheduledExecutorService TimeUnit]))
 
 (defn batching-valve
   "Reads messages from the input, stores them in batches, and writes the
@@ -37,3 +39,69 @@
               (do
                 (>! output batch)
                 (close! output)))))))
+
+(defn ^ScheduledExecutorService scheduler
+  []
+  (Executors/newSingleThreadScheduledExecutor))
+
+(defn clock-source
+  "Creates and returns a channel that emits :tick messages at the given
+   interval, in ms. If no receiver is available at the tick interval, the
+   message is stored in a buffer until the next tick interval. Consumers
+   that take longer than the period after consuming a tick will always
+   find a tick available, however, so will tick a slower irregular rate
+   dictated by their work.
+
+   The clock uses a java.util.concurrent fixed rate scheduler, so it should
+   be much more precise than timeout channels and should not accumulate error
+   based on the core.async and clock overhead."
+  [period-ms]
+  (let [ticks (chan (async/dropping-buffer 1))
+        task-fn (atom nil)
+        scheduler (scheduler)
+        tick-fn #(when-not (>!! ticks :tick)
+                   (do
+                     (.cancel @task-fn)
+                     (.shutdown scheduler)))]
+    (reset! task-fn (.scheduleAtFixedRate scheduler tick-fn period-ms period-ms
+                                          TimeUnit/MILLISECONDS))
+    ticks))
+
+(defn flow-limiting-valve
+  "Reads messages from the input and writes them to the output at a rate no
+   greater than that of the given period. The rate is enforced by a clock
+   source. The output channel is closed after the input channel depending on
+   the close? argument, by default true."
+  ([input output min-period-ms]
+     (flow-limiting-valve input output min-period-ms true))
+  ([input output min-period-ms close?]
+     (go-loop [state :ready
+               clock nil]
+       (condp = state
+         :ready
+         (if-some [value (<! input)]
+                  (do
+                    (>! output value)
+                    (recur :pause (clock-source min-period-ms)))
+                  (recur :shutdown nil))
+
+         :pause
+         (let [[value task] (alts! [input clock] :priority true)]
+           (condp = task
+             input
+             (if (some? value)
+               (do
+                 (<! clock)
+                 (>! output value)
+                 (recur :pause clock))
+               (do
+                 (close! clock)
+                 (recur :shutdown nil)))
+
+             clock
+             (do
+               (close! clock)
+               (recur :ready nil))))
+
+         :shutdown
+         (when close? (close! output))))))
