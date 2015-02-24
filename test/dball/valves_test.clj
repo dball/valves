@@ -1,5 +1,6 @@
 (ns dball.valves-test
-  (:require [clojure.core.async :refer [chan >!! <!! close! go-loop <!] :as async]
+  (:require [clojure.core.async :as async
+             :refer [chan >!! <!! close! go-loop <!]]
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
@@ -66,3 +67,35 @@
                  (let [delta (- max-ms batch-time)]
                    (pos? (+ delta timeout-error-ms))))
                batch-times)))))
+
+(defn lazy-counting-into
+  [coll ch max pause-ms]
+  (thread (loop [coll coll]
+            (when pause-ms (Thread/sleep pause-ms))
+            (let [value (<!! ch)]
+              (if (some? value)
+                (let [coll (conj coll [(now-ms) value])]
+                  (if (= max (count coll))
+                    (do
+                      (close! ch)
+                      coll)
+                    (recur coll)))
+                coll)))))
+
+(defspec test-clock-source
+  10
+  (prop/for-all [period-ms (gen/choose 10 100)
+                 work-ms (gen/return nil)]
+    (let [clock (clock-source period-ms)
+          timed-ticks (<!! (lazy-counting-into [] clock 11 work-ms))
+          times (map first timed-ticks)
+          intervals (map (comp (partial apply -) reverse) (partition 2 1 times))]
+      (and
+       ;; we read the correct number of ticks
+       (= 11 (count timed-ticks))
+       ;; the intervals are within 1ms of the specified period
+       (every? (fn [interval]
+                 (>= 1 (Math/abs (- period-ms interval))))
+               intervals)
+       ;; errors in the intervals do not accumulate
+       (>= 1 (Math/abs (- (* 10 period-ms) (- (last times) (first times)))))))))
