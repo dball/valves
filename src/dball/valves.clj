@@ -105,3 +105,23 @@
 
          :shutdown
          (when close? (close! output))))))
+
+(defn typed-valve
+  "Reads messages from the input and writes them to the output if they conform
+   to the expected type. If a message fails to conform to the expected type,
+   the output channel is closed and no more messages are read from the input."
+  ([input output type-check-fn]
+     (typed-valve input output type-check-fn true))
+  ([input output type-check-fn close?]
+     (go-loop []
+       (if-some [value (<! input)]
+                (if (type-check-fn value)
+                  (do
+                    (>! output value)
+                    (recur))
+                  (let [ex (ex-info "Invalid message" {:message value})]
+                    (when close?
+                      (close! output))
+                    (throw ex)))
+                (when close?
+                  (close! output))))))
